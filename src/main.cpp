@@ -92,7 +92,8 @@
   No user-configurable stuff below
 */
 
-// This is set from git describe by version.py run as a pre:extra_script in PlatformIO
+#include <version.h>
+
 #ifndef N2K_SOFTWARE_VERSION
 #warning "no N2K_SOFTWARE_VERSION from git"
 #define N2K_SOFTWARE_VERSION "0.0.0.0 (#__DATE__)"
@@ -125,8 +126,8 @@
 #include <ESPmDNS.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
-#include <elegantWebpage.h>
-#include <AsyncElegantOTA.h>
+// #include <elegantWebpage.h>
+#include <ElegantOTA.h>
 #endif
 
 // See https://github.com/ttlappalainen/NMEA2000/
@@ -634,8 +635,8 @@ void start_wifi()
   snprintf(ssid, 32, "ClipperDuet2N2k-%lu", (long unsigned int)SerialNumber);
   WiFi.softAP(ssid);
   dnsServer.start(53, "*", WiFi.softAPIP());
-  AsyncElegantOTA.setID(ssid);
-  AsyncElegantOTA.begin(&server);
+
+  ElegantOTA.begin(&server);
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
             { request->redirect("http://" + WiFi.softAPIP().toString() + "/update"); });
   server.begin();

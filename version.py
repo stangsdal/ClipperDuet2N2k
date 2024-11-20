@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 # see https://community.platformio.org/t/how-to-build-got-revision-into-binary-for-version-output/15380/6
+# and https://github.com/biologist79/ESPuino/blob/master/gitVersion.py
 
 import pkg_resources
 
@@ -16,13 +17,27 @@ if missing_pkgs:
 import subprocess
 import datetime
 import os
+from pathlib import Path
 
 from contextlib import suppress
 from dulwich import porcelain
 from dulwich.errors import NotGitRepository
 
-# returns a version description like "git describe --always --dirty" would
+
+OUTPUT_PATH = (
+    Path(env.subst("$BUILD_DIR")) / "generated" / "version.h"
+)  # pylint: disable=undefined-variable
+
+TEMPLATE = """
+#ifndef __VERSION_H__
+    #define __VERSION_H__
+    #define N2K_SOFTWARE_VERSION "{n2k_software_version}"
+    #define GIT_DESCRIBE "{git_describe}"
+#endif
+"""
+
 def get_git_describe_always_dirty(repo=None):
+    """# returns a version description like "git describe --always --dirty" would"""
     repo = repo or os.getcwd()
     with suppress(NotGitRepository):
         revid = None
@@ -36,8 +51,8 @@ def get_git_describe_always_dirty(repo=None):
         return f"{version}{dirtymark}"
     return "unknown"
 
-# construct a pseudo-version string from git describe, which follows format requirements of NMEA2000
 def make_n2k_version(git_dirty_describe):
+    """Constructs a pseudo-version string from git describe, which follows format requirements of NMEA2000"""
     g = git_dirty_describe
     if g[0] == 'v':
         s = g[1:]
@@ -64,21 +79,28 @@ def make_n2k_version(git_dirty_describe):
             t += "." + "0"
     return t
 
-def get_firmware_specifier_build_flag():
-    g =  get_git_describe_always_dirty('.')
+def get_firmware_specifier(g=None):
+    """Returns a firmware version string suitable for NMEA2000 version reporting."""
+    if g is None:
+        g =  get_git_describe_always_dirty('.')
 
     x = datetime.datetime.now()
     d = x.strftime("%Y-%m-%d")
 
     t = make_n2k_version(g)
 
-    n2kv = t + "\ \(" + d + "\)"
+    n2kv = t + ' (' + d + ')'
+    return n2kv
 
-    # TODO:  env.StringifyMacro()
-    build_flag = "-D N2K_SOFTWARE_VERSION=\\\"" + n2kv + "\\\" -D GIT_DESCRIBE=\\\"" + g + "\\\""
-    print ("Firmware Revision for N2k: " + t)
-    print ("git Describe: " + g)
-    return (build_flag)
+def generate():
+    """Generates header file."""
+    print("GENERATING GIT REVISION HEADER FILE")
+    gitrev = get_git_describe_always_dirty('.')
+    n2kv = get_firmware_specifier(gitrev)
+    print(f'  "{gitrev}" -> {OUTPUT_PATH}')
+    OUTPUT_PATH.parent.mkdir(exist_ok=True, parents=True)
+    with OUTPUT_PATH.open("w") as output_file:
+        output_file.write(TEMPLATE.format(n2k_software_version=n2kv, git_describe=gitrev))
 
 # This is a convenience-function for _me_
 def before_upload(source, target, env):
@@ -91,8 +113,6 @@ def before_upload(source, target, env):
             # killall not found
             return
 
-env.Append(
-    BUILD_FLAGS=[get_firmware_specifier_build_flag()]
-)
-
+generate()
+env.Append(CPPPATH=OUTPUT_PATH.parent)  # pylint: disable=undefined-variable
 env.AddPreAction("upload", before_upload)
