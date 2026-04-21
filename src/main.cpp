@@ -1,20 +1,19 @@
 /*
-  NASA Clipper Duet Echo Sounder/Log to NMEA2000 converter (ClipperDuet2N2k)
+  NASA Clipper Duet Echo Sounder/Log to NMEA2000 and Signal K converter (ClipperDuet2N2k)
   2023-01-30 by Soenke J. Peters
+  Rewritten for the SensESP platform 2026
 
   This code reads the display data from the ht1621 lcd driver of the NASA Clipper Duet
-  and converts it to useful values to be send over the NMEA2000 network.
+  and converts it to useful values sent over the NMEA2000 network and to a Signal K server
+  via the SensESP framework.
 */
 
 // SPDX-License-Identifier: MIT
 
-// TODO: Refactoring
-
 /*
  Timeout in s for Trip and Total distance
  if more than this time has elapsed between the display of the two values,
- the Trip record is considered invalid and therefore no distance log values are sent      Cancel changes
-
+ the Trip record is considered invalid and therefore no distance log values are sent
  */
 #ifndef DISTANCE_TIMEOUT
 #define DISTANCE_TIMEOUT 60
@@ -47,17 +46,12 @@
 #define ESP32_CAN_RX_PIN GPIO_NUM_4
 #endif
 
-// speed ("baud rate") for the NME0183 output (usually 4800 or 38400 bps)
+// Baud rate for the NMEA0183 output on Serial2 (usually 4800 or 38400 bps)
 #ifndef NMEA0183_SPEED
 #define NMEA0183_SPEED 4800
 #endif
 
-// speed of the serial NMEA2k forwarding in Actisense format (usually 115200 bps)
-#ifndef ACTISENSE_SPEED
-#define ACTISENSE_SPEED 115200
-#endif
-
-// Pins for 2nd serial, use defaults of HardwareSerial.h
+// Pins for Serial2; use ESP32 defaults when not overridden
 #ifndef SERIAL2_TXD
 #define SERIAL2_TXD (-1)
 #endif
@@ -65,27 +59,10 @@
 #define SERIAL2_RXD (-1)
 #endif
 
-#ifndef NMEA0183_FIRST
-// Defines which serial port is used to forward data.
-// "Serial" is usually routed to a USB-serial-converter on many ESP32 boards
-#define NMEA2K_FORWARD_SERIAL Serial
-#define NMEA0183_FORWARD_SERIAL Serial2
-#else
-#define NMEA2K_FORWARD_SERIAL Serial2
-#define NMEA0183_FORWARD_SERIAL Serial
-#endif
-
-// define if OTA updates via WIFI should be enabled
-#ifndef WITHOUT_OTA
-#define WITH_OTA
-#endif
-
 // Older Platformio ESP32 versions need this
-// TODO: specify exact version
 //#define OLD_SPI_COMMS
 
 // Have some printf() status messages on the serial console.
-// ATTN: Output of NMEA2000 to serial will be changed to text format (default: Actisense)
 //#define DEBUG
 
 /* *********************************************************************************************
@@ -117,18 +94,14 @@
 #define DEBUG_PRINT(...)
 #endif
 
+// SensESP framework – handles WiFi, Signal K server connection, OTA, web config UI
+#include "sensesp_app_builder.h"
+#include "sensesp/sensors/sensor.h"
+#include "sensesp/signalk/signalk_output.h"
+using namespace sensesp;
+
 #include <Arduino.h>
 #include <Preferences.h>
-#ifdef WITH_OTA
-#include <Update.h>
-#include <WiFi.h>
-#include <DNSServer.h>
-#include <ESPmDNS.h>
-#include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h>
-// #include <elegantWebpage.h>
-#include <ElegantOTA.h>
-#endif
 
 // See https://github.com/ttlappalainen/NMEA2000/
 #include <NMEA2000_CAN.h> // This will automatically choose right CAN library and create suitable NMEA2000 object
@@ -598,12 +571,9 @@ void InitNMEA2000()
   NMEA2000.SetInstallationDescription1("ClipperDuet2N2k " GIT_DESCRIBE " by Soenke J. Peters");
   NMEA2000.SetInstallationDescription2(PINDESCRIPTION);
 
-#ifdef DEBUG
-  NMEA2000.SetForwardType(tNMEA2000::fwdt_Text); // Show in clear text instead of Actisense format.
-#endif
-  NMEA2000.SetForwardStream(&NMEA2K_FORWARD_SERIAL);
+  // Serial is used by SensESP for logging; disable NMEA2000 Actisense forwarding
+  NMEA2000.EnableForward(false);
   NMEA2000.SetMode(tNMEA2000::N2km_ListenAndNode, 32);
-  NMEA2000.EnableForward(true);
 
   NMEA2000.ExtendTransmitMessages(TransmitMessages);
   NMEA2000.ExtendReceiveMessages(ReceiveMessages);
@@ -622,70 +592,6 @@ bool NMEA0183SetVLW(tNMEA0183Msg &NMEA0183Msg, double TotalLog, double TripLog, 
   return true;
 }
 
-#ifdef WITH_OTA
-DNSServer dnsServer;
-AsyncWebServer server(80);
-
-uint8_t wifiusage = 0;
-char ssid[33];
-
-void start_wifi()
-{
-  uint32_t SerialNumber = GetSerialNumber();
-  snprintf(ssid, 32, "ClipperDuet2N2k-%lu", (long unsigned int)SerialNumber);
-  WiFi.softAP(ssid);
-  dnsServer.start(53, "*", WiFi.softAPIP());
-
-  ElegantOTA.begin(&server);
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->redirect("http://" + WiFi.softAPIP().toString() + "/update"); });
-  server.begin();
-
-  if (MDNS.begin("clipperduet2n2k"))
-  {
-    MDNS.addService("http", "tcp", 80);
-  }
-
-  wifiusage = 1;
-}
-#endif
-
-void setup()
-{
-  clipperdata.depth = N2kDoubleNA;
-  preferences.begin("ClipperDuet2N2k", false);
-  // TODO: think of different Clipper Duet hardware revisions
-  // preferences.getUInt("hardwarerev", 1);
-  clipperdata.offset = preferences.getDouble("offset", -SAFE_OFFSET);
-  clipperdata.cal = preferences.getDouble("cal", 100);
-  clipperdata.threshold = preferences.getDouble("threshold", 0.0);
-  clipperdata.shallow_alarm = preferences.getDouble("shallow_alarm", 0.0);
-  clipperdata.speed_alarm = preferences.getDouble("speed_alarm", 0.0);
-
-  if (NMEA2K_FORWARD_SERIAL == Serial2) {
-      NMEA2K_FORWARD_SERIAL.begin(ACTISENSE_SPEED, SERIAL2_RXD, SERIAL2_TXD);
-  } else {
-    NMEA2K_FORWARD_SERIAL.begin(ACTISENSE_SPEED);
-  }
-  InitNMEA2000();
-
-  if (NMEA0183_FORWARD_SERIAL == Serial2) {
-    NMEA0183_FORWARD_SERIAL.begin(NMEA0183_SPEED, SERIAL2_RXD, SERIAL2_TXD);
-  } else {
-    NMEA0183_FORWARD_SERIAL.begin(NMEA0183_SPEED);
-  }
-  NMEA0183_Out.SetMessageStream(&NMEA0183_FORWARD_SERIAL);
-  NMEA0183_Out.Open();
-
-  printf("\n\nClipperDuet2N2k %s\n\n", GIT_DESCRIBE);
-
-  slave.setDataMode(SPI_MODE3);
-  slave.begin(HSPI, PIN_HTCLK, PIN_HTDATAOUT, PIN_HTDATA, PIN_HTCS);
-
-  // clear buffer
-  memset(spi_slave_rx_buf, 0, BUFFER_SIZE);
-}
-
 // bit field to queue the saves to NVM
 // speed_alarm | shallow_alarm | cal | threshold | offset
 const uint32_t BF_OFFSET = 1;
@@ -698,14 +604,20 @@ uint32_t queue_save = 0;
 tN2kMsg N2kMsg;
 tNMEA0183Msg NMEA0183Msg;
 
-void loop()
+/*
+ Process one SPI polling cycle: queue a receive buffer if empty, then consume all
+ available frames.  This function is called from a fast ReactESP repeat event (10 ms)
+ and contains the same display-decoding logic that was previously in loop().
+ Parsed values are written to clipperdata so that the SensESP RepeatSensors can
+ read them and forward them to the Signal K server.
+*/
+void process_spi()
 {
   now = millis();
   TimeUpdate();
 
   NMEA2000.ParseMessages();
 
-  // if there is no transaction in queue, add transaction
   if (slave.remained() == 0)
   {
     slave.queue(spi_slave_rx_buf, BUFFER_SIZE);
@@ -715,15 +627,11 @@ void loop()
   {
     uint32_t num = slave.size();
 
-    // omit "10001100 00000000" packages sent as keep-alive
     if (num > 2 && num < BUFFER_SIZE)
     {
       if ((spi_slave_rx_buf[0] & 0b11100000) == 0b10100000)
       {
         // LCD Write to display memory
-        // NASA Clipper Duet sends entire memory from address 0 to end
-        // htmem_address = ((spi_slave_rx_buf[0] & 0xf) << 1) | (spi_slave_rx_buf[1] >> 7);
-        // a check for num == 17 and htmem_address == 0 is omitted for optimization reasons
 #ifdef DEBUG_COMMS
         printf("%d Mem: ", num);
 #else
@@ -731,70 +639,51 @@ void loop()
 
         if ((clipperlcd.info2 & (1 << 2)) == (1 << 2))
         {
-          // Line LCD segment is displayed, so unit is not in settings mode
+          // Line LCD segment is displayed – unit is not in settings mode
 
-          // Check if there are any values to be saved to NVM
           if (queue_save > 0)
           {
-            // saving of shallow_alarm and speed_alarm values to NVM is delayed until return to normal screen
             if ((queue_save & BF_SHALLOW_ALARM) == BF_SHALLOW_ALARM)
             {
-              // Save shallow_alarm to NVM
               preferences.putDouble("shallow_alarm", clipperdata.shallow_alarm);
               DEBUG_PRINT("shallow_alarm saved: %fm\n", clipperdata.shallow_alarm);
             }
             if ((queue_save & BF_SPEED_ALARM) == BF_SPEED_ALARM)
             {
-              // Save speed_alarm to NVM
               preferences.putDouble("speed_alarm", clipperdata.speed_alarm);
               DEBUG_PRINT("speed_alarm saved: %fm\n", clipperdata.speed_alarm);
             }
             if ((queue_save & BF_OFFSET) == BF_OFFSET)
             {
-              // Save offset to NVM
               preferences.putDouble("offset", clipperdata.offset);
               DEBUG_PRINT("Setting offset saved: %fm\n", clipperdata.offset);
             }
             if ((queue_save & BF_THRESHOLD) == BF_THRESHOLD)
             {
-              // Save threshold to NVM
               preferences.putDouble("threshold", clipperdata.threshold);
               DEBUG_PRINT("Setting threshold saved: %fm\n", clipperdata.threshold);
             }
             if ((queue_save & BF_CAL) == BF_CAL)
             {
-              // Save paddle wheel calibration to NVM
               preferences.putDouble("cal", clipperdata.cal);
               DEBUG_PRINT("Setting cal saved: %fm\n", clipperdata.cal);
             }
             queue_save = 0;
           }
-#ifdef WITH_OTA
-          if (wifiusage == 1 && !Update.isRunning())
-          {
-            DEBUG_PRINT("Rebooting...\n", ssid);
-            wifiusage = 0; // Useless, as we restart...
-            ESP.restart();
-          }
-#endif
-          // Increment NMEA2000 SID
+
           SID = (++SID) & 0xff;
 
           double depth = rowb2double();
           if (depth != N2kDoubleNA)
           {
-            // The dot is not transferred when depth measurement has error,
-            // so look for depth_m or depth_ft segments
             if ((clipperlcd.info2 & 1) == 1)
             {
-              // Depth in m
               clipperdata.depth = depth;
               clipperdata.last_depth = now;
             }
             else if ((clipperlcd.info2 & (1 << 1)) == (1 << 1))
             {
-              // Depth in ft
-              clipperdata.depth = depth / 3.281; // store as meters
+              clipperdata.depth = depth / 3.281;
               clipperdata.last_depth = now;
             }
             else
@@ -803,7 +692,7 @@ void loop()
             }
           }
 
-          SetN2kWaterDepth(N2kMsg, SID, clipperdata.depth, clipperdata.offset, N2kDoubleNA); // TODO: send proper Range instead of N2kDoubleNA
+          SetN2kWaterDepth(N2kMsg, SID, clipperdata.depth, clipperdata.offset, N2kDoubleNA);
           NMEA2000.SendMsg(N2kMsg);
 
           NMEA0183SetDPT(NMEA0183Msg, clipperdata.depth, clipperdata.offset);
@@ -814,31 +703,25 @@ void loop()
 
           if (clipperlcd.info1 < (1 << 6))
           {
-            // Speed is displayed
             speed = rowa2double();
             if (speed != N2kDoubleNA)
             {
               if ((clipperlcd.info1 & 0b00100000) == 0b00100000)
               {
-                // KTS
-                clipperdata.speed = speed * 0.514444444444; // store as m/s
+                clipperdata.speed = speed * 0.514444444444;
               }
               else if ((clipperlcd.info1 & 0b00001100) == 0b00001100)
               {
-                // km/h
-                clipperdata.speed = speed / 3.6; // store as m/s
+                clipperdata.speed = speed / 3.6;
               }
               else if ((clipperlcd.info1 & 0b00010000) == 0b00010000)
               {
-                // miles/h
-                clipperdata.speed = speed / 2.237; // store as m/s
+                clipperdata.speed = speed / 2.237;
               }
               else
               {
-                // Set speed to 0.0 on conversion error, seems to be sane as it is the default when no sensor connected
-                clipperdata.speed = 0.0; // TODO: decide wether N2kDoubleNA is better
+                clipperdata.speed = 0.0;
               }
-
               clipperdata.last_speed = now;
             }
             else
@@ -856,28 +739,23 @@ void loop()
           }
           else
           {
-            // A distance is displayed, we will determine later if total or trip
             distance = rowa2double();
             if (distance != N2kDoubleNA)
             {
               if ((clipperlcd.info1 & 0b00000011) == 0b00000011)
               {
-                // N.miles
-                distance *= 1852; // store as m
+                distance *= 1852;
               }
               else if ((clipperlcd.info1 & 0b00001000) == 0b00001000)
               {
-                // km
-                distance *= 1000; // store as m
+                distance *= 1000;
               }
               else if ((clipperlcd.info1 & 0b00000001) == 0b00000001)
               {
-                // miles
-                distance *= 1609; // store as m
+                distance *= 1609;
               }
               else
               {
-                // Must be an error
                 distance = N2kDoubleNA;
               }
             }
@@ -886,39 +764,36 @@ void loop()
             {
               if ((clipperlcd.info1 & 0b10000000) == 0b10000000)
               {
-                // Trip display
                 clipperdata.trip = distance;
                 clipperdata.last_trip = now;
 
-                // Send distance data (no DISTANCE_TIMEOUT check)
                 SetN2kDistanceLog(N2kMsg, DaysSince1970, SecondsSinceMidnight, clipperdata.total, clipperdata.trip);
                 NMEA2000.SendMsg(N2kMsg);
 
                 NMEA0183SetVLW(NMEA0183Msg, clipperdata.total, clipperdata.trip);
                 NMEA0183_Out.SendMessage(NMEA0183Msg);
 
-                DEBUG_PRINT("Trip: %fm, Total: %fm, DaysSince1970: %u, SecondsSinceMidnight: %f\n", clipperdata.trip, clipperdata.total, DaysSince1970, SecondsSinceMidnight);
+                DEBUG_PRINT("Trip: %fm, Total: %fm, DaysSince1970: %u, SecondsSinceMidnight: %f\n",
+                            clipperdata.trip, clipperdata.total, DaysSince1970, SecondsSinceMidnight);
               }
               else if ((clipperlcd.info1 & 0b01000000) == 0b01000000)
               {
-                // Total display
                 clipperdata.total = distance;
                 clipperdata.last_total = now;
 
                 if ((now - clipperdata.last_trip) < (DISTANCE_TIMEOUT * 1000))
                 {
-                  // Trip and total distanca data are within the DISTANCE_TIMOUT, so good to send both
                   SetN2kDistanceLog(N2kMsg, DaysSince1970, SecondsSinceMidnight, clipperdata.total, clipperdata.trip);
                   NMEA2000.SendMsg(N2kMsg);
 
                   NMEA0183SetVLW(NMEA0183Msg, clipperdata.total, clipperdata.trip);
                   NMEA0183_Out.SendMessage(NMEA0183Msg);
 
-                  DEBUG_PRINT("Total: %fm, Trip: %fm, DaysSince1970: %u, SecondsSinceMidnight: %f\n", clipperdata.total, clipperdata.trip, DaysSince1970, SecondsSinceMidnight);
+                  DEBUG_PRINT("Total: %fm, Trip: %fm, DaysSince1970: %u, SecondsSinceMidnight: %f\n",
+                              clipperdata.total, clipperdata.trip, DaysSince1970, SecondsSinceMidnight);
                 }
                 else
                 {
-                  // Do not send Trip log if data is too old
                   DEBUG_PRINT("Total: %fm\n", clipperdata.total);
                 }
               }
@@ -928,149 +803,108 @@ void loop()
         else
         {
           // Settings dialogues
-#ifdef WITH_OTA
-          if (wifiusage != 1)
-          {
-            start_wifi();
-            DEBUG_PRINT("Started wifi AP %s\n", ssid);
-          }
-#endif
           if (clipperlcd.digit0 == 'W' && clipperlcd.digit1 == '(') // "u_underline Con"
           {
-            // keel offset setting confirmed
             double offset = rowb2double();
             if (offset != N2kDoubleNA)
             {
               if ((clipperlcd.info2 & 1) == 1)
               {
-                // Offset in m
-                offset = -offset; // negative as it denotes offset to keel
+                offset = -offset;
               }
               else if ((clipperlcd.info2 & (1 << 1)) == (1 << 1))
               {
-                // Offset in ft
-                offset = -(offset / 3.281); // store as meters, negative as it denotes offset to keel
+                offset = -(offset / 3.281);
               }
               else
               {
-                offset = -SAFE_OFFSET; // Set an offset which is considered to be safe
+                offset = -SAFE_OFFSET;
               }
-
               if (offset != clipperdata.offset)
               {
                 clipperdata.offset = offset;
-                // Mark value to be saved to NVM on return to normal screen
                 queue_save |= BF_OFFSET;
               }
             }
           }
           else if (clipperlcd.digit0 == 'T' && clipperlcd.digit1 == '(') // "t Con"
           {
-            // transducer gain threshold setting confirmed
             double threshold = rowb2double();
             if (threshold != N2kDoubleNA)
             {
-              if ((clipperlcd.info2 & 1) == 1)
+              if ((clipperlcd.info2 & (1 << 1)) == (1 << 1))
               {
-                // Threshold in m
-                // threshold = threshold;
+                threshold = (threshold / 3.281);
               }
-              else if ((clipperlcd.info2 & (1 << 1)) == (1 << 1))
+              else if (!((clipperlcd.info2 & 1) == 1))
               {
-                // Threshold in ft
-                threshold = (threshold / 3.281); // store as meters
+                threshold = 0.0;
               }
-              else
-              {
-                threshold = 0.0; // Store 0.0 as a threshold which is considered a safe default
-              }
-
               if (threshold != clipperdata.threshold)
               {
                 clipperdata.threshold = threshold;
-                // Mark value to be saved to NVM on return to normal screen
                 queue_save |= BF_THRESHOLD;
               }
             }
           }
-          else if (clipperlcd.digit4 == '(' && ((clipperlcd.info2 & 0b100011) == 0)) // "Con" on bottom row, no depth unit, no dot on upper row
+          else if (clipperlcd.digit4 == '(' && ((clipperlcd.info2 & 0b100011) == 0))
           {
-            // paddle wheel calibration setting
             double cal = rowa2double();
-            if (cal != N2kDoubleNA)
+            if (cal != N2kDoubleNA && cal != clipperdata.cal)
             {
-              if (cal != clipperdata.cal)
-              {
-                clipperdata.cal = cal;
-                // Mark value to be saved to NVM on return to normal screen
-                queue_save |= BF_CAL;
-              }
+              clipperdata.cal = cal;
+              queue_save |= BF_CAL;
             }
           }
-          else if (clipperlcd.digit1 == '5' && clipperlcd.digit2 == 'X') // "SHA" on top row
+          else if (clipperlcd.digit1 == '5' && clipperlcd.digit2 == 'X') // "SHA"
           {
-            // shallow depth alarm setting
             double shallow_alarm = rowb2double();
             if (shallow_alarm != N2kDoubleNA)
             {
               if ((clipperlcd.info2 & 1) == 1)
               {
-                // Offset in m
-                clipperdata.shallow_alarm = shallow_alarm; // negative as it denotes offset to keel
+                clipperdata.shallow_alarm = shallow_alarm;
               }
               else if ((clipperlcd.info2 & (1 << 1)) == (1 << 1))
               {
-                // Offset in ft
-                clipperdata.shallow_alarm = (shallow_alarm / 3.281); // store as meters, negative as it denotes offset to keel
+                clipperdata.shallow_alarm = shallow_alarm / 3.281;
               }
               else
               {
-                clipperdata.shallow_alarm = SAFE_OFFSET + 1; // Set an offset which is considered to be reasonably safe
+                clipperdata.shallow_alarm = SAFE_OFFSET + 1;
               }
-
-              // Mark value to be saved to NVM on return to normal screen
               queue_save |= BF_SHALLOW_ALARM;
             }
           }
-          else if (clipperlcd.digit4 == '5' && clipperlcd.digit5 == 'P') // "SPd" on bottom row
+          else if (clipperlcd.digit4 == '5' && clipperlcd.digit5 == 'P') // "SPd"
           {
-            // speed alarm setting
-
-            /*
-            TODO: as there are not too many uses for a speed alarm setting,
-                  maybe use this as a side-channel to set different things like enabling debug msg, reset NVM preferences, etc.
-            */
             double speed_alarm = rowa2double();
             if (speed_alarm != N2kDoubleNA)
             {
               if ((clipperlcd.info1 & 0b00100000) == 0b00100000)
               {
-                // KTS
-                clipperdata.speed_alarm = speed_alarm * 0.514444444444; // store as m/s
+                clipperdata.speed_alarm = speed_alarm * 0.514444444444;
               }
               else if ((clipperlcd.info1 & 0b00001100) == 0b00001100)
               {
-                // km/h
-                clipperdata.speed_alarm = speed_alarm / 3.6; // store as m/s
+                clipperdata.speed_alarm = speed_alarm / 3.6;
               }
               else if ((clipperlcd.info1 & 0b00010000) == 0b00010000)
               {
-                // miles/h
-                clipperdata.speed_alarm = speed_alarm / 2.237; // store as m/s
+                clipperdata.speed_alarm = speed_alarm / 2.237;
               }
             }
             else
             {
-              // There might be an "OFF" shown which we also treat as 0.0
-              speed_alarm = 0.0;
+              clipperdata.speed_alarm = 0.0;
             }
-            // Mark value to be saved to NVM on return to normal screen
             queue_save |= BF_SPEED_ALARM;
           }
           else
           {
-            // Unrecognized setting, print for debug
-            DEBUG_PRINT("?: %c %c%c%c %c%c%c\n", clipperlcd.digit0, clipperlcd.digit1, clipperlcd.digit2, clipperlcd.digit3, clipperlcd.digit4, clipperlcd.digit5, clipperlcd.digit6);
+            DEBUG_PRINT("?: %c %c%c%c %c%c%c\n", clipperlcd.digit0, clipperlcd.digit1,
+                        clipperlcd.digit2, clipperlcd.digit3, clipperlcd.digit4,
+                        clipperlcd.digit5, clipperlcd.digit6);
           }
         }
 #endif
@@ -1078,10 +912,8 @@ void loop()
 #ifdef DEBUG_COMMS
       else if ((spi_slave_rx_buf[0] & 0b11100000) == 0b10000000)
       {
-        // LCD Command
         printf("%d, Command: ", num);
       }
-
       printBits(spi_slave_rx_buf, num);
       printf("\n");
 #endif
@@ -1090,19 +922,95 @@ void loop()
     slave.pop();
   }
 
-  // Dummy to empty serial input buffers
-  if (NMEA2K_FORWARD_SERIAL.available())
+  // Drain Serial2 input to avoid buffer overflow
+  while (Serial2.available())
   {
-    NMEA2K_FORWARD_SERIAL.read();
+    Serial2.read();
   }
-  if (NMEA0183_FORWARD_SERIAL.available())
+}
+
+// Helper: convert a double in N2k base units to float for Signal K, returning NaN when invalid
+static inline float sk_float(double v)
+{
+  return (v != N2kDoubleNA) ? static_cast<float>(v) : NAN;
+}
+
+void setup()
+{
+  // SensESP initialises Serial for logging; do this first
+  SetupLogging();
+
+  clipperdata.depth = N2kDoubleNA;
+  preferences.begin("ClipperDuet2N2k", false);
+  clipperdata.offset        = preferences.getDouble("offset",        -SAFE_OFFSET);
+  clipperdata.cal           = preferences.getDouble("cal",            100);
+  clipperdata.threshold     = preferences.getDouble("threshold",      0.0);
+  clipperdata.shallow_alarm = preferences.getDouble("shallow_alarm",  0.0);
+  clipperdata.speed_alarm   = preferences.getDouble("speed_alarm",    0.0);
+
+  // Build the SensESP application.
+  // SensESP manages WiFi connectivity, OTA firmware updates, and the Signal K
+  // server connection. The web config UI is available at http://clipperduet2n2k.local/
+  SensESPAppBuilder builder;
+  auto sensesp_app = builder
+      .set_hostname("clipperduet2n2k")
+      ->get_app();
+
+  InitNMEA2000();
+
+  // NMEA0183 output always goes to Serial2
+  if (SERIAL2_TXD == -1)
   {
-    NMEA0183_FORWARD_SERIAL.read();
+    Serial2.begin(NMEA0183_SPEED);
   }
-#ifdef WITH_OTA
-  if (wifiusage == 1)
+  else
   {
-    dnsServer.processNextRequest();
+    Serial2.begin(NMEA0183_SPEED, SERIAL2_RXD, SERIAL2_TXD);
   }
-#endif
+  NMEA0183_Out.SetMessageStream(&Serial2);
+  NMEA0183_Out.Open();
+
+  ESP_LOGI("ClipperDuet2N2k", "Starting %s", GIT_DESCRIBE);
+
+  slave.setDataMode(SPI_MODE3);
+  slave.begin(HSPI, PIN_HTCLK, PIN_HTDATAOUT, PIN_HTDATA, PIN_HTCS);
+  memset(spi_slave_rx_buf, 0, BUFFER_SIZE);
+
+  // Fast event: poll HT1621 SPI bus and parse LCD data every 10 ms.
+  // This also calls NMEA2000.ParseMessages() and sends NMEA2000 / NMEA0183 messages.
+  event_loop()->onRepeat(10, []() { process_spi(); });
+
+  // Signal K outputs – values are read from clipperdata and sent to the SK server.
+  // The config paths exposed at /config allow the SK path to be changed at runtime.
+
+  auto* depth_sensor = new RepeatSensor<float>(
+      1000,
+      []() { return sk_float(clipperdata.depth); });
+  depth_sensor->connect_to(
+      new SKOutputFloat("environment.depth.belowKeel", "/sensors/depth/sk"));
+
+  auto* speed_sensor = new RepeatSensor<float>(
+      1000,
+      []() { return sk_float(clipperdata.speed); });
+  speed_sensor->connect_to(
+      new SKOutputFloat("navigation.speedThroughWater", "/sensors/speed/sk"));
+
+  auto* total_sensor = new RepeatSensor<float>(
+      5000,
+      []() { return sk_float(clipperdata.total); });
+  total_sensor->connect_to(
+      new SKOutputFloat("navigation.log", "/sensors/total/sk"));
+
+  auto* trip_sensor = new RepeatSensor<float>(
+      5000,
+      []() { return sk_float(clipperdata.trip); });
+  trip_sensor->connect_to(
+      new SKOutputFloat("navigation.trip.log", "/sensors/trip/sk"));
+
+  sensesp_app->start();
+}
+
+void loop()
+{
+  event_loop()->tick();
 }

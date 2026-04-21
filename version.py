@@ -53,31 +53,27 @@ def get_git_describe_always_dirty(repo=None):
 
 def make_n2k_version(git_dirty_describe):
     """Constructs a pseudo-version string from git describe, which follows format requirements of NMEA2000"""
-    g = git_dirty_describe
-    if g[0] == 'v':
-        s = g[1:]
-    elif g == "unknown":
-        s = "0.0.0"
-    else:
-        s = g
+    g = git_dirty_describe or "unknown"
 
-    p = s.split('-')
+    # Default to a safe version if git describe does not start with semver.
+    # This happens on repositories without a matching tag (e.g. "2bde874-dirty").
+    base_version = "0.0.0"
+    if g != "unknown":
+        s = g[1:] if g.startswith("v") else g
+        semver_token = s.split('-')[0]
+        n = semver_token.split('.')
+        if len(n) >= 3 and all(x.isdigit() for x in n[:3]):
+            base_version = ".".join([str(int(x)) for x in n[:3]])
 
-    n = p[0].split('.')
-    if len(n) != 3:
-         raise RuntimeError("versioning scheme error")
-    v = ".".join([str(int(x)) for x in n][0:3])
-
-    t = ""
+    p = g.split('-')
     if p[-1] == "dirty":
-        t = "0." + v
-    else:
-        t = v
-        if len(p) == 3:
-            t += "." + p[1]
-        else:
-            t += "." + "0"
-    return t
+        return "0." + base_version
+
+    commit_count = "0"
+    if len(p) >= 2 and p[1].isdigit():
+        commit_count = str(int(p[1]))
+
+    return base_version + "." + commit_count
 
 def get_firmware_specifier(g=None):
     """Returns a firmware version string suitable for NMEA2000 version reporting."""

@@ -1,12 +1,19 @@
-# NASA Clipper Duet Echo Sounder/Log to NMEA2000 converter (__ClipperDuet2N2k__) :sailboat: :hammer_and_wrench:
+# NASA Clipper Duet Echo Sounder/Log to NMEA2000 + Signal K converter (__ClipperDuet2N2k__) :sailboat: :hammer_and_wrench:
 
 ([German HOWTO](doc/HOWTO_de.md))
 
 ## Intro
 
-__ClipperDuet2N2k__ project is about retrofitting[^1] a NASAmarine Clipper Duet echo sounder/log with NMEA2000.
+__ClipperDuet2N2k__ project is about retrofitting[^1] a NASAmarine Clipper Duet echo sounder/log with NMEA2000 and Signal K output.
 
-It makes use of an ESP32 equipped with a CAN transceiver to read the LCD controller's data and recompute usable values for water depth, speed and distance logs to be send into the NMEA2000 CAN network.
+It makes use of an ESP32 equipped with a CAN transceiver to read the LCD controller's data and recompute usable values for water depth, speed and distance logs to be sent into the NMEA2000 CAN network.
+
+Current firmware versions use the SensESP platform for networking, web configuration and OTA update support, and can publish values to a Signal K server.
+
+## Credits and Contributors
+
+* Original author and reverse engineering: Soenke J. Peters
+* SensESP platform migration and ongoing maintenance: Peter Kristensen
 
 A small "in action" photo with the ClipperDuet2N2k connected to a Raymarine display, and CANable PC adapter:
 ![ClipperDuet2N2k front side](./doc/photo_front_complete.jpg)
@@ -39,7 +46,7 @@ Additional libraries:
 
 * [NMEA2000 library by Timo Lappalainen](https://github.com/ttlappalainen/NMEA2000/)
 * [ESP32SPISlave library by Hideaki Tai](https://github.com/hideakitai/ESP32SPISlave) (this one is included for convenience, as it is not rolled out via PlatformIO)
-* [esphome/ESPAsyncWebServer-esphome](https://github.com/esphome/ESPAsyncWebServer) and [ayushsharma82/AsyncElegantOTA](https://github.com/ayushsharma82/AsyncElegantOTA) (if compiled with OTA firmware update feature)
+* [SensESP](https://github.com/SignalK/SensESP) for WiFi provisioning, configuration UI, OTA and Signal K connectivity
 
 ### Clipper Duet modification
 
@@ -93,6 +100,8 @@ __Without this configuration step, a keel offset of -3m is used as default for s
 
 __ClipperDuet2N2k__ will send NMEA2000 sentences for depth, speed, trip and total log.
 
+It also publishes these values to a Signal K server when configured via SensESP.
+
 Other NMEA2000 devices like chart plotters or MFDs are able to display these values. The units used on the NASA Clipper Duet can be adjusted to free will, values will automatically be converted to the base units of the respecticve NMEA2000 sentences.
 
 Due to the nature of implementation, only the values shown are constantly sent out via NMEA2000. As unit conversion takes place using double float values, there might be minor rounding errors. This choice was made to ease development, as the NMEA2000 library also uses double floats.
@@ -106,19 +115,18 @@ The trip and total distance log are sent in one NMEA2000 sentence. When showing 
 
 Configuration and calibration is done as usual by manually adjusting the settings via the buttons on the NASA Clipper Duet. Setting changes in the Clipper Duet are read by the __ClipperDuet2N2k__ (see "First start").
 
-For convenience, NMEA2000 traffic is output on the serial port in ActiSense format. So the __ClipperDuet2N2k__ could be also used as a NMEA2000 to (USB-)serial gateway (with or without being connected to a Clipper Duet).
+NMEA0183 output remains available on the secondary serial interface (Serial2).
 
 ### Firmware update
 
-In case the firmware was compiled with OTA firmware update capability (`WITH_OTA` defined), __ClipperDuet2N2k__  starts a WIFI access point when the Clipper Duet is in configuration mode.
-The access point will appear with a SSID _ClipperDuet2N2k_-..._.
+Current firmware uses SensESP OTA update support.
 
-You can access the update web page via going to _clipperduet2n2k.local_ or _192.168.4.1_ in the web browser of your device connected to the _ClipperDuet2N2k-..._  access point.
+On first boot (or whenever credentials are cleared), the device starts a provisioning access point and captive portal where WiFi and Signal K server settings can be entered.
 
-As soon as configuration mode is left, __ClipperDuet2N2k__ will reboot without WIFI.
+After provisioning, the device joins your normal WiFi network and can be reached via _clipperduet2n2k.local_ for configuration and OTA updates.
 
 __Attention:__
-Make sure your settings are configured correctly after a firmware upgrade! Non-volatile-memory might have been overwritten by the update.
+Make sure your settings are configured correctly after a firmware upgrade. Non-volatile memory might have been overwritten by the update.
 
 ## Simulating sensors
 
@@ -166,6 +174,13 @@ Clipper Duet is a simple device which is more on the cheaper end of the price ra
 __ClipperDuet2N2k__ accounts for this and tries to keep things simple.
 
 Following this KISS principle, the hardware was just thrown together using modules which were lying around.
+
+## Authors
+
+| Name | Role | Attribution |
+| -- | -- | -- |
+| Soenke J. Peters | Original author, reverse engineering, initial firmware architecture | Initial project release (2023), baseline NMEA2000 converter implementation |
+| Peter Kristensen | Contributor, SensESP migration, ongoing maintenance | SensESP platform migration (2026-04-21), NMEA2000 + Signal K architecture update |
 
 ## Footnotes
 
