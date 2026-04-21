@@ -1,3 +1,6 @@
 {
-  "extensions.ignoreRecommendations": true
+"extensions.ignoreRecommendations": true,
+"chat.tools.terminal.autoApprove": {
+    "git remote": true
+}
 }
