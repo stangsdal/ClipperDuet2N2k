@@ -1,6 +1,10 @@
 {
 "extensions.ignoreRecommendations": true,
 "chat.tools.terminal.autoApprove": {
-    "git remote": true
+    "git remote": true,
+    "/^python3 /Users/peter/\\.platformio/packages/framework-arduinoespressif32/tools/gen_esp32part\\.py partitions_custom\\.csv /tmp/partitions\\.bin && echo OK$/": {
+        "approve": true,
+        "matchCommandLine": true
+    }
 }
 }

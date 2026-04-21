@@ -10,6 +10,10 @@
 
 // SPDX-License-Identifier: MIT
 
+#if defined(ARDUINO_ARCH_ESP8266)
+#error "ESP8266 (ESP-12F) is not supported by this firmware. It requires ESP32SPISlave, ESP32 Preferences/NVS and ESP32 NMEA2000 CAN support."
+#endif
+
 /*
  Timeout in s for Trip and Total distance
  if more than this time has elapsed between the display of the two values,
@@ -484,6 +488,12 @@ static inline float sk_float(double v)
   return (v != N2kDoubleNA) ? static_cast<float>(v) : NAN;
 }
 
+static double pref_double_or_default(Preferences& prefs, const char* key,
+                                     double default_value)
+{
+  return prefs.isKey(key) ? prefs.getDouble(key) : default_value;
+}
+
 void setup()
 {
   // SensESP initialises Serial for logging; do this first
@@ -491,18 +501,22 @@ void setup()
 
   clipperdata.depth = N2kDoubleNA;
   preferences.begin("ClipperDuet2N2k", false);
-  clipperdata.offset        = preferences.getDouble("offset",        -SAFE_OFFSET);
-  clipperdata.cal           = preferences.getDouble("cal",            100);
-  clipperdata.threshold     = preferences.getDouble("threshold",      0.0);
-  clipperdata.shallow_alarm = preferences.getDouble("shallow_alarm",  0.0);
-  clipperdata.speed_alarm   = preferences.getDouble("speed_alarm",    0.0);
+    clipperdata.offset = pref_double_or_default(preferences, "offset", -SAFE_OFFSET);
+    clipperdata.cal = pref_double_or_default(preferences, "cal", 100);
+    clipperdata.threshold = pref_double_or_default(preferences, "threshold", 0.0);
+    clipperdata.shallow_alarm =
+      pref_double_or_default(preferences, "shallow_alarm", 0.0);
+    clipperdata.speed_alarm =
+      pref_double_or_default(preferences, "speed_alarm", 0.0);
 
   // Build the SensESP application.
   // SensESP manages WiFi connectivity, OTA firmware updates, and the Signal K
   // server connection. The web config UI is available at http://clipperduet2n2k.local/
   SensESPAppBuilder builder;
-  auto sensesp_app = builder
-      .set_hostname("clipperduet2n2k")
+  sensesp_app = (&builder)
+      ->set_hostname("clipperduet2n2k")
+      // .set_sk_server("192.168.10.3", 80)
+      // .set_ota_password("my_ota_password")
       ->get_app();
 
   InitNMEA2000Transport(NMEA2000, TransmitMessages, ReceiveMessages,
