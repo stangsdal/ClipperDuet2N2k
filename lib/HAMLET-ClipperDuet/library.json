@@ -1,0 +1,27 @@
+{
+  "name": "HAMLET-ClipperDuet",
+  "version": "0.1.0",
+  "description": "Decoder and NMEA2000 message helper for NASA Clipper Duet HT1621 display frames",
+  "keywords": [
+    "clipper",
+    "nmea2000",
+    "esp32",
+    "marine",
+    "ht1621"
+  ],
+  "authors": [
+    {
+      "name": "stangsdal"
+    }
+  ],
+  "license": "MIT",
+  "frameworks": [
+    "arduino"
+  ],
+  "platforms": [
+    "espressif32"
+  ],
+  "dependencies": {
+    "ttlappalainen/NMEA2000-library": "^4.22.0"
+  }
+}
