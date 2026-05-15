@@ -1,6 +1,7 @@
 #include "HAMLET_ClipperDuet.h"
 
 #include <N2kMessages.h>
+#include <string.h>
 
 namespace hamlet {
 namespace clipperduet {
@@ -382,6 +383,40 @@ bool Decoder::BuildDistanceLogMessage(tN2kMsg& msg, double days_since_1970,
                     data_.trip_m);
   return true;
 }
+
+#if defined(HAMLET_CLIPPERDUET_HAS_SPI_CAPTURE)
+Esp32SpiCapture::Esp32SpiCapture(const Pins& pins) : pins_(pins) {}
+
+void Esp32SpiCapture::Begin() {
+  slave_.setDataMode(SPI_MODE3);
+  slave_.begin(HSPI, pins_.clk, pins_.miso, pins_.mosi, pins_.cs);
+  memset(rx_buf_, 0, sizeof(rx_buf_));
+}
+
+bool Esp32SpiCapture::ReadFrame(uint8_t* out_frame, size_t* out_size) {
+  if (!out_frame || !out_size) {
+    return false;
+  }
+
+  if (slave_.remained() == 0) {
+    slave_.queue(rx_buf_, kFrameBufferSize);
+  }
+
+  if (!slave_.available()) {
+    return false;
+  }
+
+  size_t frame_size = slave_.size();
+  if (frame_size > kFrameBufferSize) {
+    frame_size = kFrameBufferSize;
+  }
+
+  memcpy(out_frame, rx_buf_, frame_size);
+  *out_size = frame_size;
+  slave_.pop();
+  return true;
+}
+#endif
 
 }  // namespace clipperduet
 }  // namespace hamlet

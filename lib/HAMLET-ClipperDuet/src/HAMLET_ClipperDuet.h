@@ -3,6 +3,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if defined(ARDUINO_ARCH_ESP32) && __has_include(<ESP32SPISlave.h>)
+#define HAMLET_CLIPPERDUET_HAS_SPI_CAPTURE 1
+#include <ESP32SPISlave.h>
+#endif
+
 class tN2kMsg;
 
 namespace hamlet {
@@ -101,6 +106,30 @@ class Decoder {
   double RowAAsDouble() const;
   double RowBAsDouble() const;
 };
+
+#if defined(HAMLET_CLIPPERDUET_HAS_SPI_CAPTURE)
+class Esp32SpiCapture {
+ public:
+  struct Pins {
+    int8_t clk;
+    int8_t miso;
+    int8_t mosi;
+    int8_t cs;
+  };
+
+  explicit Esp32SpiCapture(const Pins& pins);
+
+  void Begin();
+
+  // Returns true when one frame was captured into out_frame/out_size.
+  bool ReadFrame(uint8_t* out_frame, size_t* out_size);
+
+ private:
+  Pins pins_;
+  ESP32SPISlave slave_;
+  uint8_t rx_buf_[kFrameBufferSize]{};
+};
+#endif
 
 }  // namespace clipperduet
 }  // namespace hamlet
