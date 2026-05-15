@@ -59,9 +59,9 @@ An Pins 4, 5, 7 und 8 werden Litzen - oder wie hier - Pinheader für "Dupont"-Ve
 Pinbelegung am PIC:
 
 * (ungenutzt) 1: 5V
-* 4: Data (als "SPI MOSI" an GPIO_12 des ESP32-Boards)
-* 5: Clock ((als "SPI CLK" an GPIO_14 des ESP32-Boards))
-* 7: Chip-Select ((als "SPI CS" an GPIO_27 des ESP32-Boards))
+* 4: Data (als "SPI MOSI" an GPIO_13 des ESP32-Boards)
+* 5: Clock ((als "SPI CLK" an GPIO_32 des ESP32-Boards))
+* 7: Chip-Select ((als "SPI CS" an GPIO_33 des ESP32-Boards))
 * 8: Ground (an GND vom ESP32-Board), liegt bei Verwendung eines Pinheaders praktisch
 
 Das Klebeband verhindert das Verrutschen beim Löten.

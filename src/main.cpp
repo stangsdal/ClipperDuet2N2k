@@ -30,16 +30,16 @@
 
 // Pin mappings for LCD data lines to SPI pins of the ESP32
 #ifndef PIN_HTDATA
-#define PIN_HTDATA GPIO_NUM_12    // HT1621 DATA is SPI MOSI on our ESP32 SPI Slave implementation
+#define PIN_HTDATA GPIO_NUM_13    // HT1621 DATA input line
 #endif
 #ifndef PIN_HTDATAOUT
-#define PIN_HTDATAOUT GPIO_NUM_13 // unused, but must a usable pin for SPI MISO
+#define PIN_HTDATAOUT GPIO_NUM_14 // required output line for SPI MISO in this implementation
 #endif
 #ifndef PIN_HTCLK
-#define PIN_HTCLK GPIO_NUM_14     // HT1621 WR is SPI Clk on our ESP32 SPI Slave implementation
+#define PIN_HTCLK GPIO_NUM_32     // HT1621 WR clock line
 #endif
 #ifndef PIN_HTCS
-#define PIN_HTCS GPIO_NUM_27      // HT1621 CS is SPI CS on our ESP32 SPI Slave implementation
+#define PIN_HTCS GPIO_NUM_33      // HT1621 chip select line
 #endif
 
 // Pins where the CAN bus transceiver is attached
@@ -68,6 +68,16 @@
 
 // Have some printf() status messages on the serial console.
 //#define DEBUG
+
+// Periodic runtime log of decoded Clipper Duet data (1 = enabled, 0 = disabled)
+#ifndef CLIPPER_DATA_LOG_ENABLE
+#define CLIPPER_DATA_LOG_ENABLE 1
+#endif
+
+// Throttle interval for Clipper data logs in milliseconds
+#ifndef CLIPPER_DATA_LOG_INTERVAL_MS
+#define CLIPPER_DATA_LOG_INTERVAL_MS 1000
+#endif
 
 /* *********************************************************************************************
   No user-configurable stuff below
@@ -156,6 +166,37 @@ const uint32_t BF_SPEED_ALARM = 1 << 4;
 uint32_t queue_save = 0;
 tN2kMsg N2kMsg;
 tNMEA0183Msg NMEA0183Msg;
+
+static unsigned long last_clipper_log = 0;
+
+static inline void format_n2k_value(char* out, size_t out_size, double value,
+                                    const char* unit)
+{
+  if (value == N2kDoubleNA)
+  {
+    snprintf(out, out_size, "NA");
+    return;
+  }
+
+  snprintf(out, out_size, "%.3f%s", value, unit);
+}
+
+static void log_clipper_data_snapshot()
+{
+  char depth_str[24];
+  char speed_str[24];
+  char trip_str[24];
+  char total_str[24];
+
+  format_n2k_value(depth_str, sizeof(depth_str), clipperdata.depth, "m");
+  format_n2k_value(speed_str, sizeof(speed_str), clipperdata.speed, "m/s");
+  format_n2k_value(trip_str, sizeof(trip_str), clipperdata.trip, "m");
+  format_n2k_value(total_str, sizeof(total_str), clipperdata.total, "m");
+
+  printf("[CLIPPER] depth=%s speed=%s trip=%s total=%s offset=%.3fm threshold=%.3fm cal=%.1f%%\n",
+         depth_str, speed_str, trip_str, total_str, clipperdata.offset,
+         clipperdata.threshold, clipperdata.cal);
+}
 
 /*
  Process one SPI polling cycle: queue a receive buffer if empty, then consume all
@@ -352,6 +393,14 @@ void process_spi()
               }
             }
           }
+
+#if CLIPPER_DATA_LOG_ENABLE
+          if ((now - last_clipper_log) >= CLIPPER_DATA_LOG_INTERVAL_MS)
+          {
+            log_clipper_data_snapshot();
+            last_clipper_log = now;
+          }
+#endif
         }
         else
         {

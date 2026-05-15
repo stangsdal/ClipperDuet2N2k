@@ -63,10 +63,10 @@ The firmware expects these connections (Arduino style pin numbering):
 
 | ESP32 GPIO | ClipperDuet | function / comment |
 | -- | -- | -- |
-| GPIO_NUM_12 (SPI MOSI) | PIC µC pin 4 | HT1621 DATA |
-| GPIO_NUM_13 (SPI MISO) |  unconnected | must exist due to SPI implementation |
-| GPIO_NUM_14 (SPI CLK) | PIC µC pin 5 | HT1621 WR |
-| GPIO_NUM_27 (SPI CS) | PIC µC pin 7 | HT1621 CS |
+| GPIO_NUM_13 (SPI MOSI) | PIC µC pin 4 | HT1621 DATA |
+| GPIO_NUM_14 (SPI MISO) | unconnected | must exist due to SPI implementation |
+| GPIO_NUM_32 (SPI CLK) | PIC µC pin 5 | HT1621 WR |
+| GPIO_NUM_33 (SPI CS) | PIC µC pin 7 | HT1621 CS |
 | GPIO_NUM_5 | CAN TX | CAN transceiver[^3] |
 | GPIO_NUM_4 | CAN RX | CAN transceiver[^3] |
 | GPIO_NUM_4 | CAN RX | CAN transceiver[^3] |
